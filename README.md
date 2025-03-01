@@ -35,16 +35,23 @@ source venv/bin/activate  # On Windows, use: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+4. Set up your environment variables:
+   - Copy `.env.example` to `.env`:
+   ```bash
+   cp .env.example .env
+   ```
+   - Edit `.env` with your specific configuration:
+   ```env
+   VAULT_DIR="/path/to/your/obsidian/vault"  # Path to your Obsidian vault
+   MODEL_NAME="all-MiniLM-L6-v2"            # The embedding model to use
+   OUTPUT_FILE="outputs/tags_mapping.json"   # Where to save the generated tags
+   ```
+
 ## Usage
 
 ### Tag Generator
 
-1. Open `main.py` and configure the following variables:
-```python
-vault_dir = "path/to/your/obsidian/vault"  # Path to your Obsidian vault or specific folder
-model_name = "all-MiniLM-L6-v2"           # The embedding model to use
-output_file = "outputs/tags_mapping.json"  # Where to save the generated tags
-```
+1. Make sure your `.env` file is properly configured with your vault directory and preferences.
 
 2. Run the script:
 ```bash
@@ -76,6 +83,11 @@ This is a personal project shared with the community. While I aim to maintain an
 - For troubleshooting, I recommend using [Cursor](https://cursor.sh/) or similar AI-powered development tools
 - Feel free to open issues on GitHub, but response times may vary
 - Pull requests are welcome!
+
+## Warnings
+
+If your vault is on iCloud (as mine so I save the couple bucks of obsidian sync lmao), then you want to make sure all the files are donwloaded and are selected as "Keep downloaded". You can do this easily within finder. I implemented a safety mechanism that tries to force donwload the files but of course this will make the program run much slower or might not even work or require extra permission.
+
 
 ## Contributing
 

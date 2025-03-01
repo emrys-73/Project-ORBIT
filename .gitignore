@@ -79,3 +79,4 @@ site/
 *.zip
 *.rar
 
+outputs/tags_mapping.json

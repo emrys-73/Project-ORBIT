@@ -1,6 +1,8 @@
+import numpy as np
 from sentence_transformers import SentenceTransformer
 from common.utils import read_markdown_files
 from common.logger import logger
+from tqdm import tqdm
 
 class EmbeddingsGenerator:
     """
@@ -19,45 +21,47 @@ class EmbeddingsGenerator:
 
     def load_model(self):
         """
-        Loads the SentenceTransformer model.
-        """
-        logger.info(f"Starting to load embedding model: {self.model_name}")
-        try:
-            self.model = SentenceTransformer(self.model_name)
-            logger.info(f"Model {self.model_name} loaded successfully")
-        except Exception as e:
-            logger.error(f"Failed to load model {self.model_name}: {str(e)}")
-            raise
-
-    def generate_embeddings(self):
-        """
-        Reads markdown files, encodes them with the model, and returns:
-          - file_names: list of filenames
-          - documents:  list of text contents
-          - embeddings: list of embedding vectors
+        Loads the SentenceTransformer model if not already loaded
         """
         if self.model is None:
-            logger.info("No model loaded yet, loading now...")
-            self.load_model()
+            logger.info("Loading embedding model...")
+            self.model = SentenceTransformer(self.model_name)
+            logger.info("Model loaded successfully")
 
-        logger.info(f"Reading markdown files from directory: {self.vault_dir}")
-        file_names, documents = read_markdown_files(self.vault_dir)
-        
+    def generate_embeddings(self, debug=False):
+        """
+        Generates embeddings for all markdown files in the vault directory
+        Returns:
+        - file_names: list of file names
+        - documents: list of document contents
+        - embeddings: numpy array of embeddings
+        """
+        # Load model if needed
+        self.load_model()
+
+        # Read markdown files
+        file_names, documents = read_markdown_files(self.vault_dir, debug)
         logger.info(f"Found {len(file_names)} markdown files")
-        if len(documents) > 0:
-            logger.info(f"Average document length: {sum(len(d) for d in documents) / len(documents):.0f} characters")
-
+        
         if not documents:
-            logger.warning("No markdown files found or they are empty")
-            return [], [], []
+            return [], [], np.array([])
 
-        logger.info(f"Starting embedding generation for {len(documents)} documents...")
-        try:
-            embeddings = self.model.encode(documents, show_progress_bar=True)
-            logger.info(f"Successfully created embeddings. Shape: {embeddings.shape}")
-            logger.info(f"First few files processed: {', '.join(file_names[:3])}")
-        except Exception as e:
-            logger.error(f"Error generating embeddings: {str(e)}")
-            raise
-
+        if debug:
+            logger.debug(f"Average document length: {sum(len(d) for d in documents) // len(documents)} characters")
+        
+        # Generate embeddings
+        logger.info("Generating embeddings...")
+        embeddings = []
+        
+        # Use tqdm for progress bar
+        for doc in tqdm(documents, desc="Batches", unit="batch"):
+            embedding = self.model.encode(doc)
+            embeddings.append(embedding)
+            
+        embeddings = np.array(embeddings)
+        
+        if debug:
+            logger.debug(f"Embeddings shape: {embeddings.shape}")
+            logger.debug(f"First few files: {', '.join(file_names[:3])}")
+        
         return file_names, documents, embeddings

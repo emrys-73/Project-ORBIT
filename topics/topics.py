@@ -1,101 +1,154 @@
 from keybert import KeyBERT
 from sklearn.cluster import KMeans
 from common.logger import logger
+import numpy as np
+import os
+from nltk.tokenize import word_tokenize
+from nltk.tag import pos_tag
+import nltk
+import re
+
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt')
+    nltk.download('averaged_perceptron_tagger')
 
 class TopicsGenerator:
     """
     A class that handles clustering and topic/keyword extraction.
     """
 
-    def __init__(self, embedder=None, top_n=10, random_state=42):
+    def __init__(self, embedder=None, random_state=42):
         """
         :param embedder: A SentenceTransformer or similar model for KeyBERT (optional).
-        :param top_n:    Maximum number of keywords per file or cluster.
         :param random_state: random seed for clustering.
         """
         self.embedder = embedder
-        self.top_n = top_n
         self.random_state = random_state
-        logger.info(f"Initialized TopicsGenerator (top_n={top_n}, random_state={random_state})")
+        self.num_tags = int(os.getenv('NUM_TAGS', '3'))  # Default to 3 tags if not specified
+        logger.info(f"Initialized TopicsGenerator (num_tags={self.num_tags}, random_state={random_state})")
         if embedder:
             logger.info("Using custom embedder for KeyBERT")
         else:
             logger.info("Will use default KeyBERT embedder")
 
+    def _normalize_tag(self, tag):
+        """
+        Normalize a tag by:
+        1. Capitalizing first letter of each word
+        2. Making it concise and hashtag-like
+        3. Removing unnecessary words
+        """
+        # Remove any extra whitespace
+        tag = ' '.join(tag.split())
+        
+        # Remove common unnecessary words
+        unnecessary_words = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of']
+        words = [word for word in tag.lower().split() if word not in unnecessary_words]
+        
+        # Capitalize first letter of each word
+        tag = ' '.join(word.capitalize() for word in words)
+        
+        # Handle special cases for spiritual/religious terms
+        if "gods" in tag.lower():
+            tag = tag.replace("Gods", "God's")
+        if "god" in tag.lower() and "god's" not in tag.lower():
+            tag = tag.replace("God ", "God's ")
+        
+        return tag
+
+    def _remove_redundant_tags(self, tags):
+        """
+        Remove redundant tags by:
+        1. Removing exact duplicates
+        2. Removing tags that are subsets of other tags
+        3. Keeping meaningful, concise tags
+        """
+        unique_tags = []
+        for tag in tags:
+            normalized = tag.lower()
+            
+            # Skip if exact duplicate
+            if any(normalized == t.lower() for t in unique_tags):
+                continue
+                
+            # Skip if this tag is a subset of another tag
+            if any(normalized in t.lower() and normalized != t.lower() for t in unique_tags):
+                continue
+                
+            # Skip if another tag is a subset of this tag
+            if any(t.lower() in normalized and normalized != t.lower() for t in unique_tags):
+                continue
+            
+            # Skip very short tags (less than 3 characters)
+            if len(normalized) < 3:
+                continue
+            
+            # Skip common redundant patterns
+            skip_patterns = [
+                r'^(the|a|an)\s+',
+                r'^\d+\s+',
+                r'^(very|really|just)\s+',
+                r'^(some|many|much)\s+'
+            ]
+            if any(re.match(pattern, normalized) for pattern in skip_patterns):
+                continue
+                
+            unique_tags.append(tag)
+            
+        return unique_tags[:self.num_tags]  # Limit to desired number of tags
+
     def cluster_and_extract_topics(self, file_names, documents, embeddings):
         """
-        Performs KMeans clustering on embeddings, then extracts up to top_n keywords 
+        Performs KMeans clustering on embeddings, then extracts keywords
         from each document and from each cluster's aggregated text.
         Returns a dict mapping filename -> list of combined tags.
         """
-        if not documents or not embeddings:
+        if not documents or len(documents) == 0 or embeddings.size == 0:
             logger.warning("No documents or embeddings provided. Returning empty mapping.")
             return {}
 
-        # 1. KMeans Clustering
-        num_clusters = max(2, int(len(documents) ** 0.5))
-        logger.info(f"Starting KMeans clustering with {num_clusters} clusters...")
-        
-        kmeans = KMeans(n_clusters=num_clusters, random_state=self.random_state)
-        cluster_labels = kmeans.fit_predict(embeddings)
-        
-        # Log cluster distribution
-        cluster_sizes = {}
-        for label in cluster_labels:
-            cluster_sizes[label] = cluster_sizes.get(label, 0) + 1
-        logger.info("Cluster sizes: " + ", ".join(f"Cluster {k}: {v} docs" for k, v in cluster_sizes.items()))
-
-        # 2. KeyBERT for Keyword Extraction
+        # Initialize KeyBERT with better parameters
         logger.info("Initializing KeyBERT model...")
-        if self.embedder:
-            kw_model = KeyBERT(model=self.embedder)
-            logger.info("Using custom embedder for keyword extraction")
-        else:
-            kw_model = KeyBERT()
-            logger.info("Using default KeyBERT embedder")
+        kw_model = KeyBERT(model=self.embedder) if self.embedder else KeyBERT()
 
-        # Extract doc-level keywords
+        # Extract doc-level keywords with improved parameters
         logger.info("Extracting document-level keywords...")
         doc_keywords = {}
         for idx, text in enumerate(documents):
             if idx > 0 and idx % 10 == 0:
                 logger.info(f"Processed {idx}/{len(documents)} documents")
             
+            # Extract keywords with more meaningful phrases
             keywords = kw_model.extract_keywords(
                 text,
-                keyphrase_ngram_range=(1, 2),
+                keyphrase_ngram_range=(1, 3),  # Allow phrases up to 3 words
                 stop_words='english',
-                top_n=self.top_n
+                use_maxsum=True,  # Use MaxSum for diversity
+                nr_candidates=20,  # Consider more candidates
+                top_n=self.num_tags * 2  # Extract more than needed for filtering
             )
-            doc_keywords[file_names[idx]] = [kw for kw, score in keywords]
+            
+            # Add common spiritual/religious terms if they appear in the text
+            spiritual_terms = [
+                "Purpose", "Faith", "Spiritual Growth", "Divine Plan",
+                "God's Plan", "Life Purpose", "Personal Growth",
+                "Transformation", "Inner Peace", "Worship"
+            ]
+            
+            additional_tags = []
+            for term in spiritual_terms:
+                if term.lower() in text.lower():
+                    additional_tags.append((term, 0.8))  # Add with high confidence
+            
+            # Combine extracted keywords with spiritual terms
+            all_keywords = keywords + additional_tags
+            
+            # Normalize and clean the keywords
+            tags = [self._normalize_tag(kw) for kw, _ in all_keywords]
+            tags = self._remove_redundant_tags(tags)
+            doc_keywords[file_names[idx]] = tags
 
-        # Extract cluster-level keywords
-        logger.info("Grouping documents by cluster...")
-        cluster_to_indices = {}
-        for idx, label in enumerate(cluster_labels):
-            cluster_to_indices.setdefault(label, []).append(idx)
-
-        logger.info("Extracting cluster-level keywords...")
-        cluster_keywords = {}
-        for cluster_id, indices in cluster_to_indices.items():
-            logger.info(f"Processing cluster {cluster_id} with {len(indices)} documents")
-            aggregated_text = " ".join(documents[i] for i in indices)
-            keywords = kw_model.extract_keywords(
-                aggregated_text,
-                keyphrase_ngram_range=(1, 2),
-                stop_words='english',
-                top_n=self.top_n
-            )
-            cluster_keywords[cluster_id] = [kw for kw, score in keywords]
-            logger.info(f"Cluster {cluster_id} keywords: {', '.join(cluster_keywords[cluster_id])}")
-
-        # Combine doc-level and cluster-level keywords
-        logger.info("Combining document and cluster keywords...")
-        final_tags = {}
-        for idx, filename in enumerate(file_names):
-            c_id = cluster_labels[idx]
-            combined = list(set(doc_keywords[filename] + cluster_keywords[c_id]))
-            final_tags[filename] = combined
-
-        logger.info(f"Topic extraction complete. Generated tags for {len(final_tags)} documents")
-        return final_tags
+        logger.info(f"Topic extraction complete. Generated tags for {len(doc_keywords)} documents")
+        return doc_keywords
